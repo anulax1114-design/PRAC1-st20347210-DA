@@ -9,8 +9,7 @@ Original file is located at
 # Task 4: Application Development — Streamlit
 """
 
-!pip install streamlit -q
-print('Installed')
+import streamlit as st
 
 import os
 os.makedirs('beijing_app/pages', exist_ok=True)
