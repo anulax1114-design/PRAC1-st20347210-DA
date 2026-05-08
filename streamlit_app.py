@@ -286,14 +286,18 @@ elif page == "Visualisation":
             ax2.set_ylabel(poll_x); ax2.set_title(f"Box Plot — {poll_x}"); clean_ax(ax2)
             st.pyplot(fig2,use_container_width=True); plt.close()
         st.divider()
-        sn=st.slider("Sample size",1000,20000,5000,1000)
-        samp=dff.sample(min(sn,len(dff)),random_state=42)
-        fig3,ax3=plt.subplots(figsize=(12,4))
-        for stn in sel_stations:
-            s=samp[samp["station"]==stn][[poll_x,poll_y]].dropna()
-            ax3.scatter(s[poll_x],s[poll_y],alpha=0.3,s=8,color=SCOLORS.get(stn),label=stn,rasterized=True)
-        ax3.set_xlabel(poll_x); ax3.set_ylabel(poll_y); ax3.set_title(f"Scatter — {poll_x} vs {poll_y}"); ax3.legend(); clean_ax(ax3)
-        st.pyplot(fig3,use_container_width=True); plt.close()
+        # ── FIX 2: Guard against same variable selected for both axes ──────────
+        if poll_x == poll_y:
+            st.info("Please select two different variables for the scatter plot.")
+        else:
+            sn=st.slider("Sample size",1000,20000,5000,1000)
+            samp=dff.sample(min(sn,len(dff)),random_state=42)
+            fig3,ax3=plt.subplots(figsize=(12,4))
+            for stn in sel_stations:
+                s=samp[samp["station"]==stn][[poll_x,poll_y]].dropna()
+                ax3.scatter(s[poll_x],s[poll_y],alpha=0.3,s=8,color=SCOLORS.get(stn),label=stn,rasterized=True)
+            ax3.set_xlabel(poll_x); ax3.set_ylabel(poll_y); ax3.set_title(f"Scatter — {poll_x} vs {poll_y}"); ax3.legend(); clean_ax(ax3)
+            st.pyplot(fig3,use_container_width=True); plt.close()
     with tab2:
         t_var=st.selectbox("Variable",POLLUTANTS+MET_VARS,key="tvar")
         t_mode=st.radio("Time resolution",["Hourly (diurnal)","Monthly trend","Annual trend"],horizontal=True)
@@ -358,141 +362,208 @@ elif page == "Visualisation":
 # ══ MODEL OUTPUTS ═════════════════════════════════════════════════════════════
 elif page == "Model Outputs":
     import joblib
+    from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
     MODEL_DIR="model_artefacts"
     AQI_BREAKS=[(0,12,"Good","#00C853","#000"),(12.1,35.4,"Moderate","#FFD600","#000"),
                 (35.5,55.4,"Unhealthy (Sensitive)","#FF6D00","#000"),(55.5,150.4,"Unhealthy","#D50000","#fff"),
                 (150.5,250.4,"Very Unhealthy","#6A1B9A","#fff"),(250.5,9999,"Hazardous","#4A148C","#fff")]
+
     def aqi_info(v):
         for lo,hi,label,bg,fg in AQI_BREAKS:
             if lo<=v<=hi: return label,bg,fg
         return "Hazardous","#4A148C","#fff"
+
     @st.cache_resource
     def load_model():
         try:
-            gb=joblib.load(os.path.join(MODEL_DIR,"gb_pm25_model.pkl"))
-            le=joblib.load(os.path.join(MODEL_DIR,"wind_label_encoder.pkl"))
-            feats=joblib.load(os.path.join(MODEL_DIR,"feature_names.pkl"))
-            preds=pd.read_csv(os.path.join(MODEL_DIR,"test_predictions.csv"))
-            return gb,le,feats,preds
-        except: return None,None,None,None
-    gb_model,le_wind,feat_names,test_preds=load_model()
+            gb    = joblib.load(os.path.join(MODEL_DIR,"gb_pm25_model.pkl"))
+            le    = joblib.load(os.path.join(MODEL_DIR,"wind_label_encoder.pkl"))
+            feats = joblib.load(os.path.join(MODEL_DIR,"feature_names.pkl"))
+            preds = pd.read_csv(os.path.join(MODEL_DIR,"test_predictions.csv"))
+            return gb, le, feats, preds
+        except:
+            return None, None, None, None
+
+    gb_model, le_wind, feat_names, test_preds = load_model()
+
     section_header("03 · Model Outputs","Random Forest Diagnostics","Model performance, feature importance and live PM2.5 prediction.")
+
+    # ── FIX 1: Check for None BEFORE touching any model variables ─────────────
     if gb_model is None:
-        st.markdown(f"""<div style='background:{WHITE};border:1px solid {BORDER};border-left:4px solid {RUST};border-radius:10px;padding:24px;'>
-        <p style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:{RUST};margin:0 0 8px;letter-spacing:1px;'>MODEL ARTEFACTS NOT FOUND</p>
-        <p style='font-size:0.85rem;color:{MUTED};margin:0;line-height:1.7;'>Upload the <code>model_artefacts/</code> folder to your GitHub repository.<br>
-        Required: gb_pm25_model.pkl · wind_label_encoder.pkl · feature_names.pkl · test_predictions.csv</p></div>""", unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style='background:{WHITE};border:1px solid {BORDER};border-left:4px solid {RUST};border-radius:10px;padding:24px;'>
+            <p style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:{RUST};margin:0 0 8px;letter-spacing:1px;'>MODEL ARTEFACTS NOT FOUND</p>
+            <p style='font-size:0.85rem;color:{MUTED};margin:0;line-height:1.7;'>Upload the <code>model_artefacts/</code> folder to your GitHub repository.<br>
+            Required: gb_pm25_model.pkl · wind_label_encoder.pkl · feature_names.pkl · test_predictions.csv</p>
+        </div>""", unsafe_allow_html=True)
         st.stop()
-    from sklearn.metrics import mean_squared_error,mean_absolute_error,r2_score
-    actual=test_preds["actual"]; predicted=test_preds["predicted"]
-    rmse=np.sqrt(mean_squared_error(actual,predicted)); mae=mean_absolute_error(actual,predicted); r2=r2_score(actual,predicted)
-    c1,c2,c3,c4=st.columns(4)
-    c1.metric("Test RMSE",f"{rmse:.2f} µg/m³"); c2.metric("Test MAE",f"{mae:.2f} µg/m³")
-    c3.metric("R2 Score",f"{r2:.4f}"); c4.metric("Test Samples",f"{len(actual):,}")
-    st.markdown("<br>",unsafe_allow_html=True)
-    tab1,tab2,tab3=st.tabs(["DIAGNOSTICS","FEATURE IMPORTANCE","LIVE PREDICTION"])
+
+    # Only runs if model loaded successfully
+    actual    = test_preds["actual"]
+    predicted = test_preds["predicted"]
+    rmse = np.sqrt(mean_squared_error(actual, predicted))
+    mae  = mean_absolute_error(actual, predicted)
+    r2   = r2_score(actual, predicted)
+
+    c1,c2,c3,c4 = st.columns(4)
+    c1.metric("Test RMSE",    f"{rmse:.2f} µg/m³")
+    c2.metric("Test MAE",     f"{mae:.2f} µg/m³")
+    c3.metric("R2 Score",     f"{r2:.4f}")
+    c4.metric("Test Samples", f"{len(actual):,}")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    tab1,tab2,tab3 = st.tabs(["DIAGNOSTICS","FEATURE IMPORTANCE","LIVE PREDICTION"])
+
     with tab1:
-        residuals=actual.values-predicted.values
-        col1,col2=st.columns(2)
+        residuals = actual.values - predicted.values
+        col1,col2 = st.columns(2)
         with col1:
-            fig,ax=plt.subplots(figsize=(6,5))
-            sc=ax.scatter(actual,predicted,alpha=0.1,s=5,rasterized=True,c=np.abs(residuals),cmap="YlOrRd",vmin=0,vmax=80)
+            fig,ax = plt.subplots(figsize=(6,5))
+            sc = ax.scatter(actual,predicted,alpha=0.1,s=5,rasterized=True,
+                            c=np.abs(residuals),cmap="YlOrRd",vmin=0,vmax=80)
             plt.colorbar(sc,ax=ax,shrink=0.8,label="Abs Residual")
-            mn,mx=actual.min(),actual.max()
+            mn,mx = actual.min(), actual.max()
             ax.plot([mn,mx],[mn,mx],"--",color=RUST,linewidth=1.5,label="Perfect fit")
-            ax.set_xlabel("Actual PM2.5 (µg/m³)"); ax.set_ylabel("Predicted PM2.5 (µg/m³)"); ax.set_title("Actual vs Predicted"); ax.legend(); clean_ax(ax)
+            ax.set_xlabel("Actual PM2.5 (µg/m³)"); ax.set_ylabel("Predicted PM2.5 (µg/m³)")
+            ax.set_title("Actual vs Predicted"); ax.legend(); clean_ax(ax)
             st.pyplot(fig,use_container_width=True); plt.close()
         with col2:
-            fig2,ax2=plt.subplots(figsize=(6,5))
+            fig2,ax2 = plt.subplots(figsize=(6,5))
             ax2.hist(residuals,bins=80,color=RUST_PALE,edgecolor=BORDER,linewidth=0.5,alpha=0.9)
             ax2.axvline(0,color=RUST,linestyle="--",linewidth=1.5,label="Zero")
-            ax2.axvline(np.mean(residuals),color=BROWN,linestyle="-",linewidth=1.2,label=f"Mean {np.mean(residuals):.2f}")
-            ax2.set_xlabel("Residual (µg/m³)"); ax2.set_ylabel("Count"); ax2.set_title("Residual Distribution"); ax2.legend(); clean_ax(ax2)
+            ax2.axvline(np.mean(residuals),color=BROWN,linestyle="-",linewidth=1.2,
+                        label=f"Mean {np.mean(residuals):.2f}")
+            ax2.set_xlabel("Residual (µg/m³)"); ax2.set_ylabel("Count")
+            ax2.set_title("Residual Distribution"); ax2.legend(); clean_ax(ax2)
             st.pyplot(fig2,use_container_width=True); plt.close()
-        fig3,ax3=plt.subplots(figsize=(12,3.5))
+        fig3,ax3 = plt.subplots(figsize=(12,3.5))
         ax3.scatter(predicted,residuals,alpha=0.08,s=4,color=SCOLORS["Shunyi"],rasterized=True)
         ax3.axhline(0,color=RUST,linestyle="--",linewidth=1.2)
-        ax3.axhline(mae,color=MUTED,linestyle=":",linewidth=1,label=f"+MAE {mae:.1f}")
+        ax3.axhline( mae,color=MUTED,linestyle=":",linewidth=1,label=f"+MAE {mae:.1f}")
         ax3.axhline(-mae,color=MUTED,linestyle=":",linewidth=1,label=f"-MAE {mae:.1f}")
-        ax3.set_xlabel("Predicted PM2.5"); ax3.set_ylabel("Residual"); ax3.set_title("Residuals vs Predicted"); ax3.legend(); clean_ax(ax3)
+        ax3.set_xlabel("Predicted PM2.5"); ax3.set_ylabel("Residual")
+        ax3.set_title("Residuals vs Predicted"); ax3.legend(); clean_ax(ax3)
         st.pyplot(fig3,use_container_width=True); plt.close()
         if "station" in test_preds.columns:
             st.divider()
-            st.markdown(f"<p style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:{RUST};letter-spacing:1px;'>PER-STATION PERFORMANCE</p>",unsafe_allow_html=True)
-            stn_m=test_preds.groupby("station").apply(lambda g: pd.Series({
-                "RMSE":np.sqrt(mean_squared_error(g["actual"],g["predicted"])),
-                "MAE":mean_absolute_error(g["actual"],g["predicted"]),
-                "R2":r2_score(g["actual"],g["predicted"]),"n":len(g)
+            st.markdown(f"<p style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:{RUST};letter-spacing:1px;'>PER-STATION PERFORMANCE</p>",
+                        unsafe_allow_html=True)
+            stn_m = test_preds.groupby("station").apply(lambda g: pd.Series({
+                "RMSE": np.sqrt(mean_squared_error(g["actual"],g["predicted"])),
+                "MAE":  mean_absolute_error(g["actual"],g["predicted"]),
+                "R2":   r2_score(g["actual"],g["predicted"]),
+                "n":    len(g)
             })).reset_index()
-            st.dataframe(stn_m.set_index("station").round(4),use_container_width=True)
+            st.dataframe(stn_m.set_index("station").round(4), use_container_width=True)
+
     with tab2:
         if hasattr(gb_model,"feature_importances_"):
-            imp=pd.Series(gb_model.feature_importances_,index=feat_names).sort_values()
-            top_n=st.slider("Top N features",5,len(imp),min(15,len(imp))); top=imp.tail(top_n)
-            fig,ax=plt.subplots(figsize=(9,max(4,top_n*0.45)))
-            colors_fi=[RUST if v>0.05 else "#C47B2B" if v>0.01 else IVORY_MID for v in top.values]
-            top.plot(kind="barh",ax=ax,color=colors_fi,edgecolor="none")
-            for i,(val,_) in enumerate(zip(top.values,top.index)):
-                ax.text(val+0.001,i,f"{val:.4f}",va="center",fontsize=8,color=MUTED)
+            imp   = pd.Series(gb_model.feature_importances_, index=feat_names).sort_values()
+            top_n = st.slider("Top N features", 5, len(imp), min(15,len(imp)))
+            top   = imp.tail(top_n)
+            fig,ax = plt.subplots(figsize=(9, max(4, top_n*0.45)))
+            colors_fi = [RUST if v>0.05 else "#C47B2B" if v>0.01 else IVORY_MID for v in top.values]
+            top.plot(kind="barh", ax=ax, color=colors_fi, edgecolor="none")
+            for i,(val,_) in enumerate(zip(top.values, top.index)):
+                ax.text(val+0.001, i, f"{val:.4f}", va="center", fontsize=8, color=MUTED)
             ax.set_xlabel("Importance Score"); ax.set_title(f"Top {top_n} Feature Importances"); clean_ax(ax)
-            st.pyplot(fig,use_container_width=True); plt.close()
+            st.pyplot(fig, use_container_width=True); plt.close()
+
     with tab3:
-        st.markdown(f"<p style='font-size:0.85rem;color:{MUTED};margin:0 0 16px;'>Enter current sensor readings to generate a PM2.5 prediction.</p>",unsafe_allow_html=True)
-        WIND_OPT=["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW","calm","CALM"]
+        st.markdown(f"<p style='font-size:0.85rem;color:{MUTED};margin:0 0 16px;'>Enter current sensor readings to generate a PM2.5 prediction.</p>",
+                    unsafe_allow_html=True)
+        WIND_OPT = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW","calm","CALM"]
         with st.form("predict_form"):
-            st.markdown(f"<p style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:{RUST};letter-spacing:1px;margin:0 0 8px;'>POLLUTANT READINGS</p>",unsafe_allow_html=True)
-            rc1,rc2,rc3,rc4,rc5,rc6=st.columns(6)
-            pm10=rc1.number_input("PM10",0.0,2000.0,80.0,step=1.0); so2=rc2.number_input("SO2",0.0,500.0,15.0,step=1.0)
-            no2=rc3.number_input("NO2",0.0,500.0,50.0,step=1.0); co=rc4.number_input("CO",0.0,10000.0,600.0,step=10.0)
-            o3=rc5.number_input("O3",0.0,500.0,40.0,step=1.0); lag1=rc6.number_input("Prev PM2.5",0.0,1000.0,50.0,step=1.0)
-            st.markdown(f"<p style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:{RUST};letter-spacing:1px;margin:8px 0;'>METEOROLOGICAL CONDITIONS</p>",unsafe_allow_html=True)
-            mc1,mc2,mc3,mc4=st.columns(4)
-            temp=mc1.number_input("Temp (C)",-30.0,45.0,15.0,step=0.5); pres=mc2.number_input("Pressure",980.0,1060.0,1010.0,step=0.5)
-            dewp=mc3.number_input("Dew Point",-40.0,30.0,5.0,step=0.5); wspm=mc4.number_input("Wind Speed",0.0,20.0,2.0,step=0.1)
-            ec1,ec2,ec3,ec4=st.columns(4)
-            rain=ec1.number_input("Rainfall",0.0,100.0,0.0,step=0.1); wd=ec2.selectbox("Wind Dir",WIND_OPT)
-            stn_type=ec3.selectbox("Station Type",["Urban","Suburban"]); hour_in=ec4.slider("Hour",0,23,12)
-            month_in=st.slider("Month",1,12,6)
-            submitted=st.form_submit_button("Run Prediction",use_container_width=True)
+            st.markdown(f"<p style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:{RUST};letter-spacing:1px;margin:0 0 8px;'>POLLUTANT READINGS</p>",
+                        unsafe_allow_html=True)
+            rc1,rc2,rc3,rc4,rc5,rc6 = st.columns(6)
+            pm10 = rc1.number_input("PM10",0.0,2000.0,80.0,step=1.0)
+            so2  = rc2.number_input("SO2",0.0,500.0,15.0,step=1.0)
+            no2  = rc3.number_input("NO2",0.0,500.0,50.0,step=1.0)
+            co   = rc4.number_input("CO",0.0,10000.0,600.0,step=10.0)
+            o3   = rc5.number_input("O3",0.0,500.0,40.0,step=1.0)
+            lag1 = rc6.number_input("Prev PM2.5",0.0,1000.0,50.0,step=1.0)
+            st.markdown(f"<p style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:{RUST};letter-spacing:1px;margin:8px 0;'>METEOROLOGICAL CONDITIONS</p>",
+                        unsafe_allow_html=True)
+            mc1,mc2,mc3,mc4 = st.columns(4)
+            temp = mc1.number_input("Temp (C)",-30.0,45.0,15.0,step=0.5)
+            pres = mc2.number_input("Pressure",980.0,1060.0,1010.0,step=0.5)
+            dewp = mc3.number_input("Dew Point",-40.0,30.0,5.0,step=0.5)
+            wspm = mc4.number_input("Wind Speed",0.0,20.0,2.0,step=0.1)
+            ec1,ec2,ec3,ec4 = st.columns(4)
+            rain     = ec1.number_input("Rainfall",0.0,100.0,0.0,step=0.1)
+            wd       = ec2.selectbox("Wind Dir", WIND_OPT)
+            stn_type = ec3.selectbox("Station Type",["Urban","Suburban"])
+            hour_in  = ec4.slider("Hour",0,23,12)
+            month_in = st.slider("Month",1,12,6)
+            submitted = st.form_submit_button("Run Prediction", use_container_width=True)
+
         if submitted:
-            is_urban=1 if stn_type=="Urban" else 0
-            try: wd_enc=le_wind.transform([wd])[0]
-            except: wd_enc=0
-            feat_map={"PM10":pm10,"SO2":so2,"NO2":no2,"CO":co,"O3":o3,"TEMP":temp,"PRES":pres,"DEWP":dewp,"WSPM":wspm,"RAIN":rain,
-                      "wd_encoded":wd_enc,"is_urban":is_urban,"hour_sin":np.sin(2*np.pi*hour_in/24),"hour_cos":np.cos(2*np.pi*hour_in/24),
-                      "month_sin":np.sin(2*np.pi*month_in/12),"month_cos":np.cos(2*np.pi*month_in/12),"PM2.5_lag1":lag1}
-            X_pred=np.array([[feat_map[f] for f in feat_names]])
-            prediction=float(max(0.0,gb_model.predict(X_pred)[0]))
-            label,bg_c,fg_c=aqi_info(prediction)
+            is_urban = 1 if stn_type == "Urban" else 0
+            # ── FIX 3: Inform user if wind direction not in training set ──────
+            try:
+                wd_enc = le_wind.transform([wd])[0]
+            except:
+                wd_enc = 0
+                st.caption(f"Wind direction '{wd}' was not seen during training — defaulted to encoded value 0.")
+            feat_map = {
+                "PM10": pm10, "SO2": so2, "NO2": no2, "CO": co, "O3": o3,
+                "TEMP": temp, "PRES": pres, "DEWP": dewp, "WSPM": wspm, "RAIN": rain,
+                "wd_encoded": wd_enc, "is_urban": is_urban,
+                "hour_sin":  np.sin(2*np.pi*hour_in/24),
+                "hour_cos":  np.cos(2*np.pi*hour_in/24),
+                "month_sin": np.sin(2*np.pi*month_in/12),
+                "month_cos": np.cos(2*np.pi*month_in/12),
+                "PM2.5_lag1": lag1
+            }
+            X_pred     = np.array([[feat_map[f] for f in feat_names]])
+            prediction = float(max(0.0, gb_model.predict(X_pred)[0]))
+            label, bg_c, fg_c = aqi_info(prediction)
             st.divider()
-            r1,r2,r3=st.columns(3)
+            r1,r2,r3 = st.columns(3)
             with r1:
-                st.markdown(f"""<div style='background:{WHITE};border:1px solid {BORDER};border-top:3px solid {RUST};border-radius:12px;padding:28px;text-align:center;box-shadow:0 2px 8px rgba(44,36,22,0.08);'>
-                <p style='font-family:JetBrains Mono,monospace;font-size:0.55rem;letter-spacing:2px;color:{MUTED};margin:0 0 10px;'>PREDICTED PM2.5</p>
-                <p style='font-family:Playfair Display,serif;font-size:3.2rem;font-weight:600;color:{RUST};margin:0;line-height:1;'>{prediction:.1f}</p>
-                <p style='font-size:0.78rem;color:{MUTED};margin:6px 0 0;'>µg/m³</p></div>""",unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style='background:{WHITE};border:1px solid {BORDER};border-top:3px solid {RUST};border-radius:12px;
+                            padding:28px;text-align:center;box-shadow:0 2px 8px rgba(44,36,22,0.08);'>
+                    <p style='font-family:JetBrains Mono,monospace;font-size:0.55rem;letter-spacing:2px;color:{MUTED};margin:0 0 10px;'>PREDICTED PM2.5</p>
+                    <p style='font-family:Playfair Display,serif;font-size:3.2rem;font-weight:600;color:{RUST};margin:0;line-height:1;'>{prediction:.1f}</p>
+                    <p style='font-size:0.78rem;color:{MUTED};margin:6px 0 0;'>µg/m³</p>
+                </div>""", unsafe_allow_html=True)
             with r2:
-                st.markdown(f"""<div style='background:{WHITE};border:1px solid {BORDER};border-top:3px solid {bg_c};border-radius:12px;padding:28px;text-align:center;box-shadow:0 2px 8px rgba(44,36,22,0.08);'>
-                <p style='font-family:JetBrains Mono,monospace;font-size:0.55rem;letter-spacing:2px;color:{MUTED};margin:0 0 14px;'>AQI CATEGORY</p>
-                <span style='background:{bg_c};color:{fg_c};padding:7px 20px;border-radius:20px;font-size:0.85rem;font-weight:600;font-family:JetBrains Mono,monospace;'>{label}</span>
-                </div>""",unsafe_allow_html=True)
+                st.markdown(f"""
+                <div style='background:{WHITE};border:1px solid {BORDER};border-top:3px solid {bg_c};border-radius:12px;
+                            padding:28px;text-align:center;box-shadow:0 2px 8px rgba(44,36,22,0.08);'>
+                    <p style='font-family:JetBrains Mono,monospace;font-size:0.55rem;letter-spacing:2px;color:{MUTED};margin:0 0 14px;'>AQI CATEGORY</p>
+                    <span style='background:{bg_c};color:{fg_c};padding:7px 20px;border-radius:20px;font-size:0.85rem;
+                                 font-weight:600;font-family:JetBrains Mono,monospace;'>{label}</span>
+                </div>""", unsafe_allow_html=True)
             with r3:
-                advice={"Good":"All outdoor activities are safe.","Moderate":"Sensitive individuals should limit exertion.",
-                        "Unhealthy (Sensitive)":"Sensitive groups should reduce outdoor activity.","Unhealthy":"Everyone should limit prolonged outdoor exertion.",
-                        "Very Unhealthy":"Avoid all outdoor physical activity.","Hazardous":"Stay indoors and avoid all outdoor activity."}
-                msg=advice.get(label,"Monitor conditions closely.")
-                st.markdown(f"""<div style='background:{WHITE};border:1px solid {BORDER};border-radius:12px;padding:28px;box-shadow:0 2px 8px rgba(44,36,22,0.08);'>
-                <p style='font-family:JetBrains Mono,monospace;font-size:0.55rem;letter-spacing:2px;color:{MUTED};margin:0 0 10px;'>RECOMMENDATION</p>
-                <p style='font-size:0.88rem;color:{CHARCOAL};margin:0;line-height:1.7;'>{msg}</p></div>""",unsafe_allow_html=True)
-            st.markdown("<br>",unsafe_allow_html=True)
-            fig_bar,ax_bar=plt.subplots(figsize=(10,0.9))
-            thresholds=[0,12,35.4,55.4,150.4,250.4,350]
-            aqi_colors=["#00C853","#FFD600","#FF6D00","#D50000","#6A1B9A","#4A148C"]
-            aqi_labels=["Good","Moderate","USG","Unhealthy","V.Unhealthy","Hazardous"]
-            txt_colors=["black","black","black","white","white","white"]
+                advice = {
+                    "Good":                 "All outdoor activities are safe.",
+                    "Moderate":             "Sensitive individuals should limit exertion.",
+                    "Unhealthy (Sensitive)":"Sensitive groups should reduce outdoor activity.",
+                    "Unhealthy":            "Everyone should limit prolonged outdoor exertion.",
+                    "Very Unhealthy":       "Avoid all outdoor physical activity.",
+                    "Hazardous":            "Stay indoors and avoid all outdoor activity."
+                }
+                msg = advice.get(label, "Monitor conditions closely.")
+                st.markdown(f"""
+                <div style='background:{WHITE};border:1px solid {BORDER};border-radius:12px;
+                            padding:28px;box-shadow:0 2px 8px rgba(44,36,22,0.08);'>
+                    <p style='font-family:JetBrains Mono,monospace;font-size:0.55rem;letter-spacing:2px;color:{MUTED};margin:0 0 10px;'>RECOMMENDATION</p>
+                    <p style='font-size:0.88rem;color:{CHARCOAL};margin:0;line-height:1.7;'>{msg}</p>
+                </div>""", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            fig_bar, ax_bar = plt.subplots(figsize=(10,0.9))
+            thresholds  = [0, 12, 35.4, 55.4, 150.4, 250.4, 350]
+            aqi_colors  = ["#00C853","#FFD600","#FF6D00","#D50000","#6A1B9A","#4A148C"]
+            aqi_labels  = ["Good","Moderate","USG","Unhealthy","V.Unhealthy","Hazardous"]
+            txt_colors  = ["black","black","black","white","white","white"]
             for i,(lo,hi) in enumerate(zip(thresholds[:-1],thresholds[1:])):
                 ax_bar.barh(0,hi-lo,left=lo,height=0.5,color=aqi_colors[i],edgecolor=WHITE,linewidth=0.8)
-                ax_bar.text((lo+hi)/2,0,aqi_labels[i],ha="center",va="center",fontsize=6.5,color=txt_colors[i],fontweight="bold")
+                ax_bar.text((lo+hi)/2,0,aqi_labels[i],ha="center",va="center",
+                            fontsize=6.5,color=txt_colors[i],fontweight="bold")
             ax_bar.axvline(min(prediction,340),color=CHARCOAL,linewidth=3,ymin=0.05,ymax=0.95)
             ax_bar.set_xlim(0,350); ax_bar.set_ylim(-0.5,0.5); ax_bar.axis("off")
             fig_bar.patch.set_color(IVORY)
